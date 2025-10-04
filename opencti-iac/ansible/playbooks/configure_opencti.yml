@@ -1,0 +1,153 @@
+- hosts: opencti
+  become: true
+  vars:
+    ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+
+  tasks:
+    - name: Update Ubuntu package manager
+      apt:
+        update_cache: yes
+
+    - name: Upgrade all packages to latest version
+      apt:
+        upgrade: dist
+        autoremove: yes
+        autoclean: yes
+
+    - name: Install prerequisites
+      apt:
+        name:
+          - git
+          - docker-compose
+        state: present
+
+    - name: Create opencti user
+      user:
+        name: opencti
+        shell: /bin/bash
+        create_home: yes
+        groups: docker
+        append: yes
+    
+    - name: Ensure /opt/opencti exists
+      file:
+        path: /opt/opencti
+        state: directory
+        owner: opencti
+        group: opencti
+        mode: '0755'
+
+    - name: Clone OpenCTI repository
+      become_user: opencti
+      git:
+        repo: "https://github.com/OpenCTI-Platform/docker.git"
+        dest: /opt/opencti
+        force: yes
+
+    - name: Ensure bind volume directories exist
+      become_user: opencti
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - /opt/opencti/esdata
+        - /opt/opencti/s3data
+        - /opt/opencti/redisdata
+        - /opt/opencti/amqpdata
+        - /opt/opencti/rsakeys
+
+    - name: Replace OpenCTI docker-compose file
+      copy:
+        src: ../deployed_files/docker-compose.yml
+        dest: /opt/opencti/docker-compose.yml
+        owner: opencti
+        group: opencti
+        mode: '0644'
+
+    - name: Generate .env file for OpenCTI
+      become: true
+      shell: |
+        cat << EOF > /opt/opencti/.env
+        OPENCTI_ADMIN_EMAIL={{ opencti_admin_email }}
+        OPENCTI_ADMIN_PASSWORD={{ opencti_admin_password }}
+        OPENCTI_ADMIN_TOKEN=$(cat /proc/sys/kernel/random/uuid)
+        OPENCTI_BASE_URL=https://{{ opencti_dns_name }}
+        OPENCTI_HEALTHCHECK_ACCESS_KEY=$(cat /proc/sys/kernel/random/uuid)
+        MINIO_ROOT_USER=$(cat /proc/sys/kernel/random/uuid)
+        MINIO_ROOT_PASSWORD=$(cat /proc/sys/kernel/random/uuid)
+        RABBITMQ_DEFAULT_USER=guest
+        RABBITMQ_DEFAULT_PASS=guest
+        ELASTIC_MEMORY_SIZE=4G
+        CONNECTOR_HISTORY_ID=$(cat /proc/sys/kernel/random/uuid)
+        CONNECTOR_EXPORT_FILE_STIX_ID=$(cat /proc/sys/kernel/random/uuid)
+        CONNECTOR_EXPORT_FILE_CSV_ID=$(cat /proc/sys/kernel/random/uuid)
+        CONNECTOR_IMPORT_FILE_STIX_ID=$(cat /proc/sys/kernel/random/uuid)
+        CONNECTOR_EXPORT_FILE_TXT_ID=$(cat /proc/sys/kernel/random/uuid)
+        CONNECTOR_IMPORT_DOCUMENT_ID=$(cat /proc/sys/kernel/random/uuid)
+        CONNECTOR_ANALYSIS_ID=$(cat /proc/sys/kernel/random/uuid)
+        SMTP_HOSTNAME=localhost
+        ALIENVAULT_INGEST_START_DATE={{ alienvault_ingest_start_date }}
+        ALIENVAULT_API_KEY={{ alienvault_api_key }}
+        DOMAIN_NAME={{ opencti_dns_name }}
+        NIST_API_KEY={{ nist_api_key }}
+        EOF
+      args:
+        executable: /bin/bash
+
+    - name: Ensure Docker service is running
+      systemd:
+        name: docker
+        state: started
+        enabled: yes
+
+    - name: Run Docker Compose
+      become_user: opencti
+      docker_compose:
+        project_src: /opt/opencti
+        state: present
+
+    - name: Install NGINX and Certbot
+      apt:
+        name:
+          - nginx
+          - certbot
+          - python3-certbot-nginx
+        state: present
+        update_cache: yes
+
+    - name: Ensure NGINX service is running
+      service:
+        name: nginx
+        state: started
+        enabled: yes
+
+    - name: Configure NGINX reverse proxy for OpenCTI
+      template:
+        src: ../deployed_files/opencti.nginx.j2
+        dest: /etc/nginx/sites-available/opencti
+      notify: Reload NGINX
+
+    - name: Enable NGINX site
+      file:
+        src: /etc/nginx/sites-available/opencti
+        dest: /etc/nginx/sites-enabled/opencti
+        state: link
+      notify: Reload NGINX
+
+    - name: Obtain SSL certificate with Certbot
+      command: >
+        certbot --nginx
+        -d {{ opencti_dns_name }}
+        --non-interactive
+        --agree-tos
+        --email {{ opencti_admin_email }}
+      args:
+        creates: /etc/letsencrypt/live/{{ opencti_dns_name }}/fullchain.pem
+      notify: Reload NGINX
+
+  handlers:
+    - name: Reload NGINX
+      service:
+        name: nginx
+        state: reloaded

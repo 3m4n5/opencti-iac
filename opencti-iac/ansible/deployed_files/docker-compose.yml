@@ -1,0 +1,362 @@
+services:
+  # Generate RSA key for xtm-composer (PKCS#8 format)
+  rsa-key-generator:
+    image: alpine/openssl:3.5.2
+    volumes:
+      - rsakeys:/keys
+    entrypoint: ["/bin/ash"]
+    command: ["-c", "if [ ! -f /keys/private_key.pem ]; then openssl genpkey -algorithm RSA -out /keys/private_key.pem -pkeyopt rsa_keygen_bits:4096; fi && tail -f /dev/null"]
+    healthcheck:
+      test: ["CMD", "test", "-f", "/keys/private_key.pem"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: always
+  redis:
+    image: redis:8.2.1
+    restart: always
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.19.2
+    volumes:
+      - esdata:/usr/share/elasticsearch/data
+    environment:
+      # Comment-out the line below for a cluster of multiple nodes
+      - discovery.type=single-node
+      # Uncomment the line below below for a cluster of multiple nodes
+      # - cluster.name=docker-cluster
+      - xpack.ml.enabled=false
+      - xpack.security.enabled=false
+      - thread_pool.search.queue_size=5000
+      - logger.org.elasticsearch.discovery="ERROR"
+      - "ES_JAVA_OPTS=-Xms${ELASTIC_MEMORY_SIZE} -Xmx${ELASTIC_MEMORY_SIZE}"
+    restart: always
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://elasticsearch:9200/_cluster/health?wait_for_status=yellow >/dev/null || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 50
+  minio:
+    image: minio/minio:RELEASE.2025-06-13T11-33-47Z
+    volumes:
+      - s3data:/data
+    ports:
+      - "9000:9000"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}    
+    command: server /data
+    restart: always
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+  rabbitmq:
+    image: rabbitmq:4.1-management
+    environment:
+      - RABBITMQ_DEFAULT_USER=${RABBITMQ_DEFAULT_USER}
+      - RABBITMQ_DEFAULT_PASS=${RABBITMQ_DEFAULT_PASS}
+      - RABBITMQ_NODENAME=rabbit01@localhost
+    volumes:
+      - type: bind
+        source: ./rabbitmq.conf
+        target: /etc/rabbitmq/rabbitmq.conf 
+      - amqpdata:/var/lib/rabbitmq
+    restart: always
+    healthcheck:
+      test: rabbitmq-diagnostics -q ping
+      interval: 30s
+      timeout: 30s
+      retries: 3
+  opencti:
+    image: opencti/platform:6.8.2
+    environment:
+      - NODE_OPTIONS=--max-old-space-size=8096
+      - APP__PORT=8080
+      - APP__BASE_URL=${OPENCTI_BASE_URL}
+      - APP__ADMIN__EMAIL=${OPENCTI_ADMIN_EMAIL}
+      - APP__ADMIN__PASSWORD=${OPENCTI_ADMIN_PASSWORD}
+      - APP__ADMIN__TOKEN=${OPENCTI_ADMIN_TOKEN}
+      - APP__APP_LOGS__LOGS_LEVEL=error
+      - REDIS__HOSTNAME=redis
+      - REDIS__PORT=6379
+      - ELASTICSEARCH__URL=http://elasticsearch:9200
+      - ELASTICSEARCH__NUMBER_OF_REPLICAS=0
+      - MINIO__ENDPOINT=minio
+      - MINIO__PORT=9000
+      - MINIO__USE_SSL=false
+      - MINIO__ACCESS_KEY=${MINIO_ROOT_USER}
+      - MINIO__SECRET_KEY=${MINIO_ROOT_PASSWORD}
+      - RABBITMQ__HOSTNAME=rabbitmq
+      - RABBITMQ__PORT=5672
+      - RABBITMQ__PORT_MANAGEMENT=15672
+      - RABBITMQ__MANAGEMENT_SSL=false
+      - RABBITMQ__USERNAME=${RABBITMQ_DEFAULT_USER}
+      - RABBITMQ__PASSWORD=${RABBITMQ_DEFAULT_PASS}
+      - SMTP__HOSTNAME=${SMTP_HOSTNAME}
+      - SMTP__PORT=25
+      - PROVIDERS__LOCAL__STRATEGY=LocalStrategy
+      - APP__HEALTH_ACCESS_KEY=${OPENCTI_HEALTHCHECK_ACCESS_KEY}
+    ports:
+      - "0.0.0.0:8080:8080"
+    depends_on:
+      redis:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    restart: always
+    healthcheck:
+      test:  ["CMD", "wget", "-qO-", "http://opencti:8080/health?health_access_key=${OPENCTI_HEALTHCHECK_ACCESS_KEY}"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+  worker:
+    image: opencti/worker:6.8.2
+    environment:
+      - OPENCTI_URL=http://opencti:8080
+      - OPENCTI_TOKEN=${OPENCTI_ADMIN_TOKEN}
+      - WORKER_LOG_LEVEL=info
+    depends_on:
+      opencti:
+        condition: service_healthy
+    deploy:
+      mode: replicated
+      replicas: 3
+    restart: always
+  connector-export-file-stix:
+    image: opencti/connector-export-file-stix:6.8.2
+    environment:
+      - OPENCTI_URL=http://opencti:8080
+      - OPENCTI_TOKEN=${OPENCTI_ADMIN_TOKEN}
+      - CONNECTOR_ID=${CONNECTOR_EXPORT_FILE_STIX_ID} # Valid UUIDv4
+      - CONNECTOR_TYPE=INTERNAL_EXPORT_FILE
+      - CONNECTOR_NAME=ExportFileStix2
+      - CONNECTOR_SCOPE=application/json
+      - CONNECTOR_LOG_LEVEL=info
+    restart: always
+    depends_on:
+      opencti:
+        condition: service_healthy
+  connector-export-file-csv:
+    image: opencti/connector-export-file-csv:6.8.2
+    environment:
+      - OPENCTI_URL=http://opencti:8080
+      - OPENCTI_TOKEN=${OPENCTI_ADMIN_TOKEN}
+      - CONNECTOR_ID=${CONNECTOR_EXPORT_FILE_CSV_ID} # Valid UUIDv4
+      - CONNECTOR_TYPE=INTERNAL_EXPORT_FILE
+      - CONNECTOR_NAME=ExportFileCsv
+      - CONNECTOR_SCOPE=text/csv
+      - CONNECTOR_LOG_LEVEL=info
+    restart: always
+    depends_on:
+      opencti:
+        condition: service_healthy
+  connector-export-file-txt:
+    image: opencti/connector-export-file-txt:6.8.2
+    environment:
+      - OPENCTI_URL=http://opencti:8080
+      - OPENCTI_TOKEN=${OPENCTI_ADMIN_TOKEN}
+      - CONNECTOR_ID=${CONNECTOR_EXPORT_FILE_TXT_ID} # Valid UUIDv4
+      - CONNECTOR_TYPE=INTERNAL_EXPORT_FILE
+      - CONNECTOR_NAME=ExportFileTxt
+      - CONNECTOR_SCOPE=text/plain
+      - CONNECTOR_LOG_LEVEL=info
+    restart: always
+    depends_on:
+      opencti:
+        condition: service_healthy
+  connector-import-file-stix:
+    image: opencti/connector-import-file-stix:6.8.2
+    environment:
+      - OPENCTI_URL=http://opencti:8080
+      - OPENCTI_TOKEN=${OPENCTI_ADMIN_TOKEN}
+      - CONNECTOR_ID=${CONNECTOR_IMPORT_FILE_STIX_ID} # Valid UUIDv4
+      - CONNECTOR_TYPE=INTERNAL_IMPORT_FILE
+      - CONNECTOR_NAME=ImportFileStix
+      - CONNECTOR_VALIDATE_BEFORE_IMPORT=true # Validate any bundle before import
+      - CONNECTOR_SCOPE=application/json,text/xml
+      - CONNECTOR_AUTO=true # Enable/disable auto-import of file
+      - CONNECTOR_LOG_LEVEL=info
+    restart: always
+    depends_on:
+      opencti:
+        condition: service_healthy
+  connector-import-document:
+    image: opencti/connector-import-document:6.8.2
+    environment:
+      - OPENCTI_URL=http://opencti:8080
+      - OPENCTI_TOKEN=${OPENCTI_ADMIN_TOKEN}
+      - CONNECTOR_ID=${CONNECTOR_IMPORT_DOCUMENT_ID} # Valid UUIDv4
+      - CONNECTOR_TYPE=INTERNAL_IMPORT_FILE
+      - CONNECTOR_NAME=ImportDocument
+      - CONNECTOR_VALIDATE_BEFORE_IMPORT=true # Validate any bundle before import
+      - CONNECTOR_SCOPE=application/pdf,text/plain,text/html
+      - CONNECTOR_AUTO=true # Enable/disable auto-import of file
+      - CONNECTOR_ONLY_CONTEXTUAL=false # Only extract data related to an entity (a report, a threat actor, etc.)
+      - CONNECTOR_LOG_LEVEL=info
+      - IMPORT_DOCUMENT_CREATE_INDICATOR=true
+    restart: always
+    depends_on:
+      opencti:
+        condition: service_healthy
+  connector-analysis:
+    image: opencti/connector-import-document:6.8.2
+    environment:
+      - OPENCTI_URL=http://opencti:8080
+      - OPENCTI_TOKEN=${OPENCTI_ADMIN_TOKEN}
+      - CONNECTOR_ID=${CONNECTOR_ANALYSIS_ID} # Valid UUIDv4
+      - CONNECTOR_TYPE=INTERNAL_ANALYSIS
+      - CONNECTOR_NAME=ImportDocumentAnalysis
+      - CONNECTOR_VALIDATE_BEFORE_IMPORT=false # Validate any bundle before import
+      - CONNECTOR_SCOPE=application/pdf,text/plain,text/html
+      - CONNECTOR_AUTO=true # Enable/disable auto-import of file
+      - CONNECTOR_ONLY_CONTEXTUAL=false # Only extract data related to an entity (a report, a threat actor, etc.)
+      - CONNECTOR_LOG_LEVEL=info
+    restart: always
+    depends_on:
+      opencti:
+        condition: service_healthy
+  xtm-composer:
+    image: filigran/xtm-composer:1.0.0
+    platform: linux/amd64
+    environment:
+      - MANAGER__ID=${XTM_COMPOSER_ID}
+      - MANAGER__NAME=OpenCTI Connector Manager
+      - MANAGER__CREDENTIALS_KEY_FILEPATH=/keys/private_key.pem
+      - OPENCTI__ENABLE=true
+      - OPENCTI__URL=http://opencti:8080
+      - OPENCTI__TOKEN=${OPENCTI_ADMIN_TOKEN}
+      - OPENCTI__DAEMON__SELECTOR=docker
+      - OPENCTI__DAEMON__DOCKER__NETWORK_MODE=${COMPOSE_PROJECT_NAME}_default
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - rsakeys:/keys:ro  # RSA key mounted as read-only
+    depends_on:
+      rsa-key-generator:
+        condition: service_healthy
+      opencti:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    restart: always
+  connector-alienvault:
+    image: opencti/connector-alienvault:rolling
+    environment:
+      - OPENCTI_URL=http://opencti:8080
+      - OPENCTI_TOKEN=${OPENCTI_ADMIN_TOKEN}
+      - CONNECTOR_ID=3bb3a233-ce10-43bb-9e54-a4747a7075ba
+      - CONNECTOR_NAME=AlienVault
+      - CONNECTOR_SCOPE=alienvault
+      - CONNECTOR_LOG_LEVEL=info
+      - CONNECTOR_DURATION_PERIOD=PT30M # In ISO8601 Format starting with "P" for Period ex: "PT30M" = Period time of 30 minutes
+      - ALIENVAULT_BASE_URL=https://otx.alienvault.com
+      - ALIENVAULT_API_KEY=${ALIENVAULT_API_KEY}
+      - ALIENVAULT_TLP=White
+      - ALIENVAULT_CREATE_OBSERVABLES=true
+      - ALIENVAULT_CREATE_INDICATORS=true
+      - ALIENVAULT_PULSE_START_TIMESTAMP=${ALIENVAULT_INGEST_START_DATE}                  # BEWARE! Could be a lot of pulses!
+      - ALIENVAULT_REPORT_TYPE=threat-report
+      - ALIENVAULT_REPORT_STATUS=New
+      - ALIENVAULT_GUESS_MALWARE=false                                        # Use tags to guess malware.
+      - ALIENVAULT_GUESS_CVE=false                                            # Use tags to guess CVE.
+      - ALIENVAULT_EXCLUDED_PULSE_INDICATOR_TYPES=FileHash-MD5,FileHash-SHA1  # Excluded Pulse indicator types.
+      - ALIENVAULT_ENABLE_RELATIONSHIPS=true                                  # Enable/Disable relationship creation between SDOs.
+      - ALIENVAULT_ENABLE_ATTACK_PATTERNS_INDICATES=false                     # Enable/Disable "indicates" relationships between indicators and attack patterns
+      - ALIENVAULT_FILTER_INDICATORS=false                                    # Filter indicators by their created datetime
+      - ALIENVAULT_INTERVAL_SEC=1800
+      - ALIENVAULT_DEFAULT_X_OPENCTI_SCORE=50
+      - ALIENVAULT_X_OPENCTI_SCORE_IP=60
+      - ALIENVAULT_X_OPENCTI_SCORE_DOMAIN=70
+      - ALIENVAULT_X_OPENCTI_SCORE_HOSTNAME=75
+      - ALIENVAULT_X_OPENCTI_SCORE_EMAIL=70
+      - ALIENVAULT_X_OPENCTI_SCORE_FILE=85
+      - ALIENVAULT_X_OPENCTI_SCORE_URL=80
+      - ALIENVAULT_X_OPENCTI_SCORE_MUTEX=60
+      - ALIENVAULT_X_OPENCTI_SCORE_CRYPTOCURRENCY_WALLET=80
+    depends_on: 
+      opencti:
+        condition: service_healthy
+    restart: always
+  
+  connector-mitre:
+    image: opencti/connector-mitre:rolling
+    environment:
+      - OPENCTI_URL=http://opencti:8080
+      - OPENCTI_TOKEN=${OPENCTI_ADMIN_TOKEN}
+    depends_on: 
+      opencti:
+        condition: service_healthy
+    restart: always
+
+  connector-cve:
+    image: opencti/connector-cve:rolling
+    environment:
+      - OPENCTI_URL=http://opencti:8080
+      - OPENCTI_TOKEN=${OPENCTI_ADMIN_TOKEN}
+#      - CONNECTOR_ID=ChangeMe
+      - CONNECTOR_NAME=Common Vulnerabilities and Exposures
+#      - CONNECTOR_SCOPE=cve
+#      - CONNECTOR_RUN_AND_TERMINATE=false
+#      - CONNECTOR_LOG_LEVEL=error
+      - CVE_BASE_URL=https://services.nvd.nist.gov/rest/json/cves # Optional
+      - CVE_API_KEY=${NIST_API_KEY} # Required
+      - CVE_INTERVAL=2 # Optional, in hours advice min 2
+#      - CVE_MAX_DATE_RANGE=120 # Optional In days, max 120
+      - CVE_MAINTAIN_DATA=true # Optional, retrieve only updated data
+      - CVE_PULL_HISTORY=true # Optional, If true, CVE_HISTORY_START_YEAR is required
+      - CVE_HISTORY_START_YEAR=2019 # Required if pull_history is True, min 2019 (see documentation CVE and CVSS base score V3.1)
+#    restart: always
+    depends_on: 
+      opencti:
+        condition: service_healthy
+    restart: always
+
+volumes:
+  esdata:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /opt/opencti/esdata
+  s3data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /opt/opencti/s3data
+  redisdata:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /opt/opencti/redisdata
+  amqpdata:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /opt/opencti/amqpdata
+  rsakeys: 
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /opt/opencti/rsakeys

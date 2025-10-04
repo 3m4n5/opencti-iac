@@ -1,0 +1,6 @@
+opencti_admin_email: ""
+opencti_admin_password: ""
+alienvault_ingest_start_date: "2025-07-01T00:00:00"
+alienvault_api_key: ""
+opencti_dns_name: ""
+nist_api_key: ""
