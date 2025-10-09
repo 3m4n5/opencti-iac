@@ -43,6 +43,8 @@
         repo: "https://github.com/OpenCTI-Platform/docker.git"
         dest: /opt/opencti
         force: yes
+      tags: 
+        - opencti
 
     - name: Ensure bind volume directories exist
       become_user: opencti
@@ -64,6 +66,8 @@
         owner: opencti
         group: opencti
         mode: '0644'
+      tags: 
+        - opencti
 
     - name: Generate .env file for OpenCTI
       become: true
@@ -94,18 +98,32 @@
         EOF
       args:
         executable: /bin/bash
+      tags: 
+        - opencti
 
     - name: Ensure Docker service is running
       systemd:
         name: docker
         state: started
         enabled: yes
+      tags: 
+        - opencti
+
+    - name: Stop Docker Compose
+      become_user: opencti
+      docker_compose:
+        project_src: /opt/opencti
+        state: absent
+      tags: 
+        - opencti
 
     - name: Run Docker Compose
       become_user: opencti
       docker_compose:
         project_src: /opt/opencti
         state: present
+      tags: 
+        - opencti
 
     - name: Install NGINX and Certbot
       apt:
@@ -115,18 +133,24 @@
           - python3-certbot-nginx
         state: present
         update_cache: yes
+      tags: 
+        - nginx
 
     - name: Ensure NGINX service is running
       service:
         name: nginx
         state: started
         enabled: yes
+      tags: 
+        - nginx
 
     - name: Configure NGINX reverse proxy for OpenCTI
       template:
         src: ../deployed_files/opencti.nginx.j2
         dest: /etc/nginx/sites-available/opencti
       notify: Reload NGINX
+      tags: 
+        - nginx
 
     - name: Enable NGINX site
       file:
@@ -134,6 +158,8 @@
         dest: /etc/nginx/sites-enabled/opencti
         state: link
       notify: Reload NGINX
+      tags: 
+        - nginx
 
     - name: Obtain SSL certificate with Certbot
       command: >
@@ -145,9 +171,14 @@
       args:
         creates: /etc/letsencrypt/live/{{ opencti_dns_name }}/fullchain.pem
       notify: Reload NGINX
+      tags: 
+        - nginx
 
   handlers:
+
     - name: Reload NGINX
       service:
         name: nginx
         state: reloaded
+      tags: 
+        - nginx

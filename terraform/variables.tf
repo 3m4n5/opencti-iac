@@ -8,7 +8,7 @@ variable "location" {
 }
 
 variable "server_size" {
-    default = "cx42"
+    default = "cpx41"
 }
 
 variable "os_type" {
