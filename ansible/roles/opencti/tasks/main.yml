@@ -1,0 +1,103 @@
+- name: Create opencti user
+  user:
+    name: opencti
+    shell: /bin/bash
+    create_home: yes
+    groups: docker
+    append: yes
+  tags:
+    - opencti
+
+- name: Ensure /opt/opencti exists
+  file:
+    path: /opt/opencti
+    state: directory
+    owner: opencti
+    group: opencti
+    mode: '0755'
+  tags:
+    - opencti
+
+- name: Clone OpenCTI repository
+  become_user: opencti
+  git:
+    repo: "https://github.com/OpenCTI-Platform/docker.git"
+    dest: /opt/opencti
+    force: yes
+  tags: 
+    - opencti
+
+- name: Ensure bind volume directories exist
+  become_user: opencti
+  stat:
+    path: "{{ item }}"
+  loop:
+    - /opt/opencti/esdata
+    - /opt/opencti/s3data
+    - /opt/opencti/redisdata
+    - /opt/opencti/amqpdata
+    - /opt/opencti/rsakeys
+  register: opencti_bind_check
+  tags:
+    - opencti
+
+- name: Create bind volumes if missing
+  become_user: opencti
+  file:
+    path: "{{ item.item }}"     # the path is in the original item field
+    state: directory
+    mode: '0755'
+  loop: "{{ opencti_bind_check.results }}"
+  when: not item.stat.exists
+  tags:
+    - opencti
+
+
+- name: Replace OpenCTI docker-compose file
+  copy:
+    src: ../deployed_files/docker-compose.yml
+    dest: /opt/opencti/docker-compose.yml
+    owner: opencti
+    group: opencti
+    mode: '0644'
+  tags: 
+    - opencti
+
+- name: Check environment file exists
+  stat:
+    path: '/opt/opencti/.env'
+  register: file_check
+  tags:
+    - opencti
+
+- name: Create new environment file
+  template:
+    src: ../templates/opencti.env.j2
+    dest: /opt/opencti/.env
+  when: not file_check.stat.exists
+  tags:
+    - opencti
+
+- name: Ensure Docker service is running
+  systemd:
+    name: docker
+    state: started
+    enabled: yes
+  tags: 
+    - opencti
+
+- name: Stop Docker Compose
+  become_user: opencti
+  docker_compose:
+    project_src: /opt/opencti
+    state: absent
+  tags: 
+    - opencti
+
+- name: Run Docker Compose
+  become_user: opencti
+  docker_compose:
+    project_src: /opt/opencti
+    state: present
+  tags: 
+    - opencti

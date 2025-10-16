@@ -1,0 +1,9 @@
+---
+- hosts: opencti
+  become: true
+  roles: 
+    - common
+    - docker
+    - opencti
+    - nginx
+    - certs

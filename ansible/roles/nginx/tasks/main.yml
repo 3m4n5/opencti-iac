@@ -1,0 +1,33 @@
+- name: Install NGINX
+  apt:
+    name:
+      - nginx
+    state: present
+    update_cache: yes
+  tags: 
+    - nginx
+
+- name: Ensure NGINX service is running
+  service:
+    name: nginx
+    state: started
+    enabled: yes
+  tags: 
+    - nginx
+
+- name: Configure NGINX reverse proxy for OpenCTI
+  template:
+    src:  ../templates/opencti.nginx.j2
+    dest: /etc/nginx/sites-available/opencti
+  notify: Reload NGINX
+  tags: 
+    - nginx
+
+- name: Enable NGINX site
+  file:
+    src: /etc/nginx/sites-available/opencti
+    dest: /etc/nginx/sites-enabled/opencti
+    state: link
+  notify: Reload NGINX
+  tags: 
+    - nginx

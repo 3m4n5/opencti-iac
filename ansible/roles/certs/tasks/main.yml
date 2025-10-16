@@ -1,0 +1,30 @@
+- name: Install Certbot
+  apt:
+    name:
+      - certbot
+      - python3-certbot-nginx
+    state: present
+    update_cache: yes
+  tags: 
+    - certbot
+
+- name: Check for existing SSL certificate
+  stat:
+    path: etc/letsencrypt/live/{{ opencti_dns_name }}/fullchain.pem
+  register: existing_ssl_certicate
+  tags:
+    - certbot
+
+- name: Obtain SSL certificate with Certbot
+  command: >
+    certbot --nginx
+    -d {{ opencti_dns_name }}
+    --non-interactive
+    --agree-tos
+    --email {{ opencti_admin_email }}
+  args:
+    creates: /etc/letsencrypt/live/{{ opencti_dns_name }}/fullchain.pem
+  notify: Reload NGINX
+  when: not existing_ssl_certicate.stat.exists
+  tags: 
+    - certbot

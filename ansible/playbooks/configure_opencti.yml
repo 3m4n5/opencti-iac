@@ -175,10 +175,3 @@
         - nginx
 
   handlers:
-
-    - name: Reload NGINX
-      service:
-        name: nginx
-        state: reloaded
-      tags: 
-        - nginx
