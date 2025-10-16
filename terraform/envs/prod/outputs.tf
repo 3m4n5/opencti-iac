@@ -3,5 +3,5 @@ resource "local_file" "ansible_inventory" {
 [opencti]
 ${hcloud_server.opencti_server.ipv4_address} ansible_user=root
 EOT
-  filename = "../ansible/inventories/prod/hosts.ini"
+  filename = "../../ansible/inventories/prod/hosts.ini"
 }
