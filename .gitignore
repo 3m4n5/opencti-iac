@@ -1,0 +1,11 @@
+terraform/.terraform/
+terraform/terraform.tfstate*
+terraform/*.tfvars
+ansible/**/opencti.vault.yml
+ansible/.retry
+terraform/terraform.tfstate.backup
+terraform/.terraform.lock.hcl
+.vscode*
+inventory.ini
+ansible/inventories/prod/hosts.ini
+terraform/envs/prod/*

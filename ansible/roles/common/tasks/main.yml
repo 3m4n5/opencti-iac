@@ -1,0 +1,22 @@
+
+- name: Update Ubuntu package manager
+  apt:
+    update_cache: yes
+  tags:
+    - common
+
+- name: Upgrade all packages to latest version
+  apt:
+    upgrade: dist
+    autoremove: yes
+    autoclean: yes
+  tags:
+    - common
+
+- name: Install git
+  apt:
+    name:
+      - git
+    state: present
+  tags:
+    - common
