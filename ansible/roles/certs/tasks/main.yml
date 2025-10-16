@@ -6,14 +6,14 @@
     state: present
     update_cache: yes
   tags: 
-    - certbot
+    - certs
 
 - name: Check for existing SSL certificate
   stat:
     path: etc/letsencrypt/live/{{ opencti_dns_name }}/fullchain.pem
   register: existing_ssl_certicate
   tags:
-    - certbot
+    - certs
 
 - name: Obtain SSL certificate with Certbot
   command: >
@@ -27,4 +27,4 @@
   notify: Reload NGINX
   when: not existing_ssl_certicate.stat.exists
   tags: 
-    - certbot
+    - certs

@@ -8,4 +8,8 @@ terraform/.terraform.lock.hcl
 .vscode*
 inventory.ini
 ansible/inventories/prod/hosts.ini
-terraform/envs/prod/*
+terraform/envs/prod/terraform.auto.tfvars
+terraform/envs/prod/terraform.tfstate.backup
+.gitignore
+terraform/envs/prod/.terraform.lock.hcl
+terraform/envs/ansible/inventories/prod/hosts.ini
